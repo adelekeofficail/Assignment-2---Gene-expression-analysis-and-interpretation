@@ -1,0 +1,404 @@
+---
+title: "Assignment Final"
+author: "Gbolahan Adeleke"
+date: "2023-12-18"
+output:
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Define the path to the tar.gz file and the extraction directory
+tar_file_path <- "brca_tcga_pan_can_atlas_2018.tar.gz"
+extract_folder_path <- "/extracted_files/"
+
+# Create the directory if it doesn't exist
+if (!dir.exists(extract_folder_path)) {
+  dir.create(extract_folder_path)
+}
+
+# Extract the tar.gz file
+untar(tar_file_path, exdir = extract_folder_path)
+
+# Check the extracted contents
+list.files(extract_folder_path)
+
+```
+
+```{r}
+# change directory to the extracted folders
+
+#\setwd(paste(getwd() , "/brca_tcga_pan_can_atlas_2018", sep = ""))
+```
+
+
+```{r}
+#Import
+rnaseq <- read.table("brca_tcga_pan_can_atlas_2018/data_mrna_seq_v2_rsem.txt", header = TRUE, sep = "\t")
+clinical <- read.table("brca_tcga_pan_can_atlas_2018/data_clinical_patient.txt", header = TRUE, sep = "\t")
+cna <- read.table("brca_tcga_pan_can_atlas_2018/data_cna.txt", header = TRUE, sep = "\t")
+
+```
+
+
+```{r}
+# This is more for simplicity.If you keep your analysis would still be correct so no worries.
+
+keep = !duplicated(rnaseq[,1])
+
+rnaseq = rnaseq[keep,]
+
+```
+
+```{r}
+# find ERBB2 in cna
+
+erbb2_indx = which(cna[,1] == 'ERBB2')
+
+# Plot histogram to visualize explore the data.
+
+hist(as.numeric(cna[erbb2_indx,-c(1,2)]))
+
+```
+
+```{r}
+
+# match patients in rnaseq to patients in cna.
+
+rna_cna_id = which(is.element(colnames(rnaseq[,-c(1,2)]), colnames(cna[,-c(1,2)])))
+
+# select only the rna cases which have cna data.
+
+rna_cna_sub = rnaseq[,2+rna_cna_id]
+
+```
+
+```{r}
+# check all patients in rna_can_sub are in cna
+
+no_pats_in_rna_cna_sub_and_cna = sum(is.element(colnames(rnaseq[,2+rna_cna_id]), colnames(cna[,-c(1,2)])))
+
+
+```
+
+```{r}
+# sanity check.This will print an error if the result is not the same.
+
+sanity_check = no_pats_in_rna_cna_sub_and_cna == dim(rna_cna_sub)[2]
+
+```
+
+```{r}
+# Pre-allocate memory for ERBB2
+
+meta_erbb2 = matrix(0,length(rna_cna_id),1)
+
+for (i in 1:length(rna_cna_id)){
+  # access the colnames of i
+  col_i = colnames(rna_cna_sub)[i]
+  # get the index in cna for the same patient
+  col_cna = which(colnames(cna)==col_i)
+  # store if they're amplified.
+  meta_erbb2[i,] = 1*(cna[erbb2_indx,col_cna]>0)
+  
+}
+```
+
+```{r}
+# simple checks to make sure. 
+
+col_i = colnames(rna_cna_sub)[1]
+
+col_cna = which(colnames(cna)==col_i)
+
+col_cna
+```
+
+```{r}
+# sanity check
+
+(cna[erbb2_indx,col_cna]>0) == meta_erbb2[1,1]
+
+```
+
+
+```{r}
+# see now if a positive meta_erbb2 is amplified.
+
+pos_example = which(meta_erbb2==1)[1]
+
+
+col_i = colnames(rna_cna_sub)[pos_example]
+
+col_cna = which(colnames(cna)==col_i)
+
+```
+
+
+```{r}
+# sanity check
+
+(cna[erbb2_indx,col_cna]>0) == meta_erbb2[pos_example,1]
+
+```
+
+
+```{r}
+# We will add a title to the metadata.
+
+colnames(meta_erbb2) = 'ERBB2Amp'
+
+# transform into integers
+
+rna_cna_sub = round(rna_cna_sub)
+
+```
+
+
+```{r}
+# Install DESeq2.
+
+
+#if (!require("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+
+# Install DeSeq2
+
+#BiocManager::install("DESeq2")
+
+library(DESeq2)
+
+```
+
+
+
+```{r}
+# DESeq2 normalization
+dds <- DESeqDataSetFromMatrix(countData = rna_cna_sub, colData = meta_erbb2, design = ~ ERBB2Amp)
+
+dds <- DESeq(dds)
+
+
+```
+
+
+```{r}
+
+# Running the differential gene expression analysis
+resultsNames(dds)
+res <- results(dds, name = "ERBB2Amp")
+
+```
+
+```{r}
+# Order the results by the absolute value of the log2 fold change
+resOrdered <- res[order(abs(res$log2FoldChange), decreasing = TRUE), ]
+
+# Extract the top 10 differentially expressed genes
+topGenes <- head(resOrdered, 10)
+
+# View the top 10 genes
+topGenes
+```
+
+
+```{r}
+# Extract log2 fold changes
+log2FoldChanges <- res$log2FoldChange
+
+# Convert DESeq2 results to a data frame
+res_df <- as.data.frame(res)
+
+library(ggplot2)
+library(ggrepel)
+
+ggplot(res_df, aes(x = log2FoldChange, y = -log10(pvalue))) +
+  geom_point(aes(colour = padj < 0.05)) +
+  labs(title = "Volcano Plot of Gene Expression",
+       x = "Log2 Fold Change",
+       y = "-log10(p-value)") +
+  theme_minimal()
+
+```
+
+```{r}
+# Adding significant genes to the plot
+ggplot(res_df, aes(x=log2FoldChange, y=-log10(pvalue))) +
+  geom_point(aes(colour = padj < 0.05)) +
+  geom_point(data = subset(res_df, padj < 0.05), aes(x=log2FoldChange, y=-log10(pvalue)), color="red") +
+  labs(title = "Volcano Plot with Significant Genes Highlighted",
+       x = "Log2 Fold Change",
+       y = "-log10(p-value)") +
+  theme_minimal()
+
+```
+
+```{r}
+# Add row names as a column in the data frame
+res_df$gene <- rownames(res_df)
+
+
+# Using geom_text_repel with the correct label mapping
+ggplot(res_df, aes(x = log2FoldChange, y = -log10(pvalue))) +
+  geom_point(aes(colour = padj < 0.05)) +
+  geom_text_repel(
+    data = subset(res_df, gene %in% c("ERBB2")), # Use the 'gene' column for subsetting
+    aes(label = gene, x = log2FoldChange, y = -log10(pvalue)), # Set label aesthetic to 'gene'
+    box.padding = 0.35, point.padding = 0.5,
+    segment.color = 'grey50'
+  ) +
+  labs(title = "Volcano Plot with ERBB2 Labeled",
+       x = "Log2 Fold Change",
+       y = "-log10(p-value)") +
+  theme_minimal()
+
+
+```
+
+
+```{r}
+# Extracting the significant differential expressed genes
+sig_genes <- subset(res, padj < 0.05)
+
+head(sig_genes)
+```
+
+
+
+
+```{r}
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("clusterProfiler")
+
+```
+
+
+
+```{r}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("org.Hs.eg.db")
+
+```
+
+
+```{r}
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+
+
+# Performing enrichment analysis
+enrich_res <- enrichGO(gene         = sig_genes,
+                       OrgDb        = org.Hs.eg.db,
+                       keyType      = 'SYMBOL',
+                       ont          = "BP",
+                       pAdjustMethod = "BH",
+                       qvalueCutoff  = 0.05)
+
+```
+
+
+
+```{r}
+ek <- enrichKEGG(gene = rownames(sig_genes),
+                 organism = 'hsa', # 'hsa' for Homo sapiens (human). Use the appropriate organism code
+                 keyType = 'kegg',
+                 pAdjustMethod = 'BH',
+                 qvalueCutoff = 0.05)
+
+# View the results
+head(ego)
+head(ek)
+
+```
+
+```{r}
+# To visualize the enrichment results, you can plot a dotplot or a barplot
+library(enrichplot)
+
+# Dotplot
+dotplot(ego, showCategory=20) + ggtitle("GO Enrichment Analysis")
+dotplot(ek, showCategory=20) + ggtitle("KEGG Pathway Enrichment Analysis")
+
+# Barplot
+barplot(ego, showCategory=20) + ggtitle("GO Enrichment Analysis")
+barplot(ek, showCategory=20) + ggtitle("KEGG Pathway Enrichment Analysis")
+
+```
+
+
+```{r}
+# Compute the variance stabilizing transformation
+vst_data <- vst(dds, blind=FALSE)
+
+# Extracting the transformed values
+vst_values <- assay(vst_data)
+
+```
+
+
+```{r}
+# PCA Plot
+plotPCA(vst_data, intgroup = "ERBB2Amp")
+
+```
+
+
+
+```{r}
+
+# PCA on the vst_values
+pca_res <- prcomp(t(vst_values))
+
+# Determine the number of clusters, let's say you decide on k (e.g., k = 3)
+set.seed(123) # For reproducibility
+km_res <- kmeans(pca_res$x[, 1:2], centers = 3)
+
+# Add the cluster assignments to your pca data
+pca_data <- as.data.frame(pca_res$x[, 1:2])
+pca_data$cluster <- as.factor(km_res$cluster)
+
+# Visualize the clusters in PCA plot
+library(ggplot2)
+ggplot(pca_data, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "PCA Plot with Clusters")
+
+```
+
+```{r}
+
+# Perform hierarchical clustering
+dissimilarity_matrix <- dist(t(vst_values))  # transpose to cluster genes, not samples
+hc <- hclust(dissimilarity_matrix)
+
+# Plot the dendrogram
+plot(hc)
+
+# Cut the tree into K clusters 
+k <- 5 # number of clusters you want to create
+clusters <- cutree(hc, k)
+
+# Add cluster assignments to your data
+vst_values$cluster <- as.factor(clusters)
+
+```
+
+
+
+
+
+
+
+
+
+
